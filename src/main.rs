@@ -1,10 +1,9 @@
 use std::time::Duration;
 
-use eyre::WrapErr as _;
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::net::windows::named_pipe::{ClientOptions, PipeMode, ServerOptions};
-use windows::Win32::Foundation::ERROR_PIPE_BUSY;
+use tokio::io::AsyncWriteExt as _;
+use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
 
+const PIPE_NAME: &str = "test-pipe";
 const PIPE_PATH: &str = r"\\.\pipe\test-pipe";
 
 #[tokio::main]
@@ -29,37 +28,20 @@ async fn main() -> eyre::Result<()> {
         Result::<_, eyre::Error>::Ok(())
     });
 
-    let client_task = tokio::task::spawn(async {
-        let mut client = loop {
-            let client = ClientOptions::new()
-                .pipe_mode(PipeMode::Message)
-                .open(PIPE_PATH);
-            match client {
-                Ok(client) => break client,
-                Err(error) if error.raw_os_error() == Some(ERROR_PIPE_BUSY.0 as i32) => {
-                    // The pipe is busy, so try connecting again after a short delay
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                }
-                Err(error) => {
-                    return Err(error).wrap_err("failed to connect to pipe");
-                }
-            }
-        };
+    let client_task = tokio::task::spawn_blocking(|| -> eyre::Result<()> {
+        let (client_reader, _) = win_pipes::NamedPipeClientOptions::new(PIPE_NAME)
+            .wait()
+            .mode_message()
+            .access_inbound()
+            .create()?;
 
-        let mut buffer = vec![0; 16];
         loop {
-            // buffer.fill(0);
-            // println!("reading...");
-            // let result = client.read(&mut buffer).await;
-            buffer.clear();
-            let result = client.read_to_end(&mut buffer).await;
-            println!("read result: {result:?}");
-            println!("buffer: {}", bstr::BStr::new(&buffer));
-            println!("-----------");
-            tokio::time::sleep(Duration::from_millis(500)).await;
+            println!("reading...");
+            let message = client_reader.read_full()?;
+            println!("read message: {}", message.len());
+            // println!("message: {}", bstr::BStr::new(&message));
+            std::thread::sleep(Duration::from_millis(500));
         }
-
-        Result::<_, eyre::Error>::Ok(())
     });
 
     let (client_result, server_result) = tokio::try_join!(client_task, server_task)?;
