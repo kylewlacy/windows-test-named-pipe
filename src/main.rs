@@ -1,47 +1,72 @@
 use std::time::Duration;
 
+use clap::Parser;
+use color_eyre::owo_colors::OwoColorize;
 use tokio::io::AsyncWriteExt as _;
 use tokio::net::windows::named_pipe::{PipeMode, ServerOptions};
 
 const PIPE_NAME: &str = "test-pipe";
 const PIPE_PATH: &str = r"\\.\pipe\test-pipe";
 
+#[derive(Debug, Parser)]
+struct Args {
+    #[clap(short, long, default_value = "25")]
+    num_messages: u32,
+
+    #[clap(short, long, default_value = "5000")]
+    message_size: usize,
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    let Args {
+        num_messages,
+        message_size,
+    } = Args::parse();
+
+    println!("Running with {num_messages} messages of size {message_size}");
+
     let mut server = ServerOptions::new()
         .first_pipe_instance(true)
         .pipe_mode(PipeMode::Message)
         .create(PIPE_PATH)?;
 
     let server_task = tokio::task::spawn(async move {
-        println!("waiting for connection...");
         server.connect().await?;
-        for i in 0..25 {
-            // let message = format!("{i}: This message is kinda long");
-            let message = format!("{i}: {LOREM_IPSUM}");
-            println!("writing...");
-            server.write_all(message.as_bytes()).await?;
+        println!("{} Client connected", "[server]".magenta());
+        for i in 1..=num_messages {
+            let message: Vec<u8> = std::iter::repeat(())
+                .enumerate()
+                .map(|(i, _)| i as u8)
+                .take(message_size)
+                .collect();
+            server.write_all(&message).await?;
             server.flush().await?;
-            println!("wrote message {i}");
+            println!("{} Sent message {i} / {num_messages}", "[server]".magenta());
         }
 
         Result::<_, eyre::Error>::Ok(())
     });
 
-    let client_task = tokio::task::spawn_blocking(|| -> eyre::Result<()> {
+    let client_task = tokio::task::spawn_blocking(move || -> eyre::Result<()> {
         let (client_reader, _) = win_pipes::NamedPipeClientOptions::new(PIPE_NAME)
             .wait()
             .mode_message()
             .access_inbound()
             .create()?;
 
-        loop {
-            println!("reading...");
+        for i in 1..=num_messages {
+            println!("{} Reading message {i} / {num_messages}", "[client]".cyan());
             let message = client_reader.read_full()?;
-            println!("read message: {}", message.len());
-            // println!("message: {}", bstr::BStr::new(&message));
-            std::thread::sleep(Duration::from_millis(500));
+            let length = message.len();
+            println!(
+                "{} Read message {i} / {num_messages}: {length}",
+                "[client]".cyan()
+            );
+            std::thread::sleep(Duration::from_millis(50));
         }
+
+        Ok(())
     });
 
     let (client_result, server_result) = tokio::try_join!(client_task, server_task)?;
@@ -50,19 +75,3 @@ async fn main() -> eyre::Result<()> {
 
     Ok(())
 }
-
-const LOREM_IPSUM: &str = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nulla consectetur imperdiet metus, quis rhoncus augue ultricies a. Sed sodales quam in orci pharetra ullamcorper et sed enim. Quisque eget mauris et dui consectetur placerat. Aenean laoreet iaculis orci finibus imperdiet. Nullam placerat fringilla eleifend. Donec viverra auctor lacus, sed tincidunt mi consequat eget. Suspendisse ullamcorper dapibus ullamcorper. Fusce eget pulvinar mi. Integer diam odio, feugiat ac mattis ac, hendrerit eu magna. Nam sodales in ligula non aliquet. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nam pulvinar sollicitudin lacus sit amet interdum. Phasellus sapien nisi, eleifend viverra massa a, faucibus aliquet dui. In sollicitudin, nulla eget lacinia malesuada, neque ipsum dictum nisi, quis bibendum lorem lorem in massa. Duis vitae dolor magna.
-
-Maecenas tempor nunc vitae quam vestibulum bibendum. Cras ut odio nunc. Maecenas placerat metus ac vehicula imperdiet. Nunc condimentum sed magna non molestie. Nunc a pretium nibh, sit amet rutrum quam. Vestibulum nec placerat ex, quis hendrerit leo. Donec maximus eleifend massa ac elementum. Proin non ligula ligula. Integer sit amet dui rhoncus, pretium urna posuere, molestie arcu. Nunc nec rutrum lacus. Nulla sagittis ornare arcu, ut tristique leo ultricies ut. Nam volutpat nunc nec neque imperdiet, eu pharetra ante vulputate. Phasellus rutrum porta nunc convallis tristique. Nulla ante neque, ullamcorper a tortor vulputate, hendrerit auctor erat. Vestibulum a augue mi.
-
-Aliquam mollis tincidunt ante. Etiam ac dictum enim, sed euismod magna. Nulla tincidunt laoreet urna, eu suscipit elit ullamcorper in. Donec sed leo sem. Ut consequat suscipit malesuada. Phasellus consectetur mi ut velit suscipit dignissim eget at lectus. Nulla semper metus sit amet nunc ultricies tincidunt. Class aptent taciti sociosqu ad litora torquent per conubia nostra, per inceptos himenaeos. Sed cursus porta quam, dignissim ornare metus scelerisque a. Suspendisse interdum nunc et turpis rhoncus porttitor. Aliquam maximus arcu imperdiet, venenatis justo vitae, convallis diam. Mauris efficitur felis sed hendrerit lobortis.
-
-Sed ultricies interdum orci eu auctor. Donec vitae arcu vel nisl porttitor pellentesque. Suspendisse ac vehicula ante. Aliquam euismod augue et enim iaculis, ac varius felis faucibus. Cras tortor dui, pharetra sit amet ex vitae, auctor bibendum mi. Vestibulum vel velit nisl. Morbi dictum hendrerit enim at faucibus. Proin odio nulla, posuere ut scelerisque a, tristique quis arcu. Integer mauris est, maximus quis lectus ac, tincidunt bibendum odio. Vivamus nec tempus felis.
-
-Sed sagittis elit ipsum, ac volutpat nisl vehicula a. Vestibulum non congue tortor. Duis non cursus risus, eu scelerisque turpis. Vestibulum sit amet libero imperdiet lacus semper auctor. Integer pharetra, ligula quis mollis volutpat, risus neque ullamcorper diam, pharetra viverra mauris libero at tellus. Nullam sed venenatis nulla, eget aliquam metus. Sed efficitur magna ipsum, non sodales nunc hendrerit id.
-
-Orci varius natoque penatibus et magnis dis parturient montes, nascetur ridiculus mus. Maecenas tincidunt in nulla vel pellentesque. Nullam quis porta ligula. Cras porttitor purus purus, sed sollicitudin eros luctus eget. Ut vitae ullamcorper augue. Nunc sit amet turpis nunc. Quisque pulvinar hendrerit magna, ac laoreet ipsum cursus id. Vivamus luctus mauris vitae viverra aliquet. Maecenas varius sem ex, sit amet dignissim ante vehicula a. Nam vel justo eget velit dapibus porta non eu leo. Ut lacinia volutpat massa, varius malesuada nisl dictum quis. Suspendisse gravida mi quis ex bibendum imperdiet. Sed semper facilisis tristique. Nullam posuere, ipsum sed varius aliquet, nisi tortor fringilla libero, quis aliquam mi felis in purus. Nam elit mauris, hendrerit eu facilisis nec, porta vel felis. Duis tristique diam felis, posuere maximus nunc varius eu.
-
-Quisque nec elit erat. Nam ornare felis eu lacinia mollis. Nam urna orci, tempus in risus in, porta ornare nibh. Pellentesque a viverra dui. Vivamus nibh ligula, ultrices sed faucibus at, hendrerit vitae orci. Vivamus lacinia libero in augue convallis hendrerit. Donec tempus luctus augue at rhoncus. Ut auctor augue augue, id efficitur ex tincidunt in. Aenean dignissim, diam vitae maximus tempus, ipsum nunc posuere nibh, at condimentum mi felis ut orci. Morbi facilisis metus urna, id congue sapien dignissim a. Ut quis aliquam velit. Nulla eu accumsan massa, nec condimentum nunc. Proin ac ullamcorper enim, id vehicula nibh. Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas.
-
-Donec justo odio, faucibus in pretium vitae, euismod sit amet enim. Aenean ornare sed diam ullamcorper aliquet. Integer in felis ullamcorper, porta erat id, maximus augue. Ut porta at sapien sit amet rutrum. Mauris ac augue eu lacus cursus tincidunt. Sed luctus blandit purus varius mollis. Nulla facilisis viverra neque, gravida ultricies erat aliquet et non.";
